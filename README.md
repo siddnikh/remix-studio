@@ -60,7 +60,7 @@ Keys are read only when a request is sent, so they never reach a plan, state fil
 | Route | Runs | Live price checked on 2026-11-05 |
 |---|---|---|
 | `http:sume` | Seedance 2.5, the model all our results used | $0.4112 for 4 s at 480p, or about $0.49 with a 4 s reference clip |
-| `http:sume-image` | Stills such as GPT Image 2.5 | $0.0059 per low-quality image |
+| `http:sume-image` | Stills such as GPT Image 2.5 | $0.0059 per low-quality image, $0.0132 at medium |
 | `http:sume-remix` | Sume's own motion transfer model | $0.123 per source second at 480p. Not yet tried by this project |
 
 A reference clip adds its own length to the billed seconds: a 10 s reference with a 4 s output prices at $0.8609. Sume's estimator is free and needs no key, so `remix-studio gen estimate` can check a line first, and every paid line is checked again before it's submitted.
@@ -160,7 +160,7 @@ These are Sume's live estimates for the same job shapes, not completed jobs. The
 | Job | On Higgsfield | On Sume |
 |---|---:|---:|
 | 4 s subject swap with a 4 s reference, 480p | 12 credits | about $0.49 |
-| `remix` generation: two 4 s clips and three stills, 480p | 25.5 credits | about $0.84 |
+| `remix` generation: two 4 s clips and three medium-quality stills, 480p | 25.5 credits | about $0.86 |
 
 Published credit prices put that first job at roughly $0.52 to $0.90 on Higgsfield. Sume's own [comparison page](https://www.sume.com/compare/sume-remix-vs-higgsfield-genjutsu), checked by Sume on 2026-10-27, lists Genjutsu at $0.318 per input second at 480p, or half that at the maximum discount, which is about $0.64 to $1.27 for 4 s. That's the vendor's own comparison, and we haven't checked it against Higgsfield's API prices.
 
