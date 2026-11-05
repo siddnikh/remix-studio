@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+runs/
+*.mp4
+*.mov
+.pytest_cache/
+.env
+.DS_Store
+.edl-cache/
+*.egg-info/
+build/
