@@ -15,11 +15,14 @@ from an edit decision list (EDL), checks the result, delivers.
 
 studio/analyze.py   probe, cut detection, energy map, contact sheets
 studio/score.py     objective comparison of an output against its source
-studio/providers.py model adapters and call execution, including any Higgsfield image or video model
+studio/providers.py treg routes and the shared job types
+studio/services.py  any HTTP generation API, from services.json
 studio/ledger.py    spend ledger with a finite cap
-studio/genjutsu.py  our Genjutsu-equivalent pipeline
+studio/gen.py       runs a plan of paid stills and clips under the ledger
+studio/swap.py      subject-swap pipeline
 studio/edl.py       EDL validation and ffmpeg render
-skills/remix/       Claude Code skill for the Katana-equivalent
+studio/cli.py       the remix-studio command
+skills/             the remix and subject-swap skills
 runs/               outputs, git-ignored
 
 ## Acceptance criteria

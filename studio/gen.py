@@ -1,15 +1,14 @@
 #!/usr/bin/env python
 """Run paid stills and clips from a finite plan, under the spend ledger.
 
-    gen.py quote  run/plan/gen_plan.json              total the plan against its cap; spends nothing
-    gen.py run    run/plan/gen_plan.json --line kf1   reserve, submit, poll, download, settle
-    gen.py run    ... --line c2 --reroll "identity"   one bounded retry with a named reason
-    gen.py pass-canary run/plan/gen_plan.json --family fox --note "identity holds, hands fine"
-    gen.py status run/plan/gen_plan.json
-    gen.py quote-live run/plan/gen_plan.json --line c1   free get_cost for a higgsfield.* line
+    remix-studio gen quote  run/plan/gen_plan.json              total the plan against its cap; spends nothing
+    remix-studio gen run    run/plan/gen_plan.json --line kf1   reserve, submit, poll, download, settle
+    remix-studio gen run    ... --line c2 --reroll "identity"   one bounded retry with a named reason
+    remix-studio gen pass-canary run/plan/gen_plan.json --family fox --note "identity holds, hands fine"
+    remix-studio gen status run/plan/gen_plan.json
 
 State lives beside the plan, so a re-run after a crash polls the task it already paid for. Line format:
-skills/remix/references/generation.md.
+references/generation.md in the remix skill.
 """
 from __future__ import annotations
 
@@ -23,14 +22,12 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
-from studio import analyze, providers  # noqa: E402
-from studio.ledger import CapExceeded, Ledger  # noqa: E402
+from . import analyze, providers, services
+from .ledger import CapExceeded, Ledger
 
 MAX_ATTEMPTS = {"still": 3, "plate": 3, "clip": 2}
 DONE, FAILED, REFUSED, OPEN = "done", "failed", "refused", "open"
-HF_PREFIX = "higgsfield."
+HTTP_PREFIX = "http:"
 
 
 class GenError(Exception):
@@ -38,7 +35,7 @@ class GenError(Exception):
 
 
 class Run:
-    def __init__(self, plan_path: str | Path, treg=None, sleep=time.sleep, fetch=None, higgsfield=None):
+    def __init__(self, plan_path: str | Path, treg=None, sleep=time.sleep, fetch=None):
         self.plan_path = Path(plan_path)
         self.dir = self.plan_path.parent
         self.plan = json.loads(self.plan_path.read_text())
@@ -54,9 +51,7 @@ class Run:
         self.state_path = self.dir / "gen_state.json"
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {"lines": {}, "canaries": {}}
         self._treg = treg
-        hf = self.plan.get("higgsfield") or {}
-        self.higgsfield = higgsfield or (providers.HiggsfieldJobs(hf["cwd"], model=hf.get("model", "haiku")) if hf.get("cwd") else None)
-        self.hf_logs = self.dir / "hf_logs"
+        self._services: dict[str, services.HttpService] = {}
         self.sleep = sleep
         self.fetch = fetch or _fetch
         self.ledger = Ledger(self.dir / "ledger.jsonl", Decimal(str(self.plan["cap"])), self.plan.get("currency", "USD"))
@@ -97,9 +92,9 @@ class Run:
                 if not done:
                     raise GenError(f"waiting on line {m.group(1)}: it has no accepted result yet")
                 return done[-1]["url"]
-            m = re.fullmatch(r"<media (.+)>", value)
+            m = re.fullmatch(r"<inline (.+)>", value)
             if m:
-                return self._media_id(m.group(1))
+                return services.data_uri(self._plan_file(m.group(1)))
             m = re.fullmatch(r"<host (.+)>", value)
             if m:
                 hosted = self.state.setdefault("hosted", {})
@@ -107,60 +102,25 @@ class Run:
                     if not self.plan.get("hosting_consent"):
                         raise GenError("this plan uploads a local file to a public URL for 7 days; set hosting_consent "
                                        "only after the user agreed for this file")
-                    info = self.treg.host((self.dir / m.group(1)).resolve())
+                    info = self.treg.host(self._plan_file(m.group(1)))
                     hosted[m.group(1)] = info.get("url") or info["public_url"]
                     self._save()
                 return hosted[m.group(1)]
         return value
 
-    def _media_id(self, rel: str) -> str:
+    def _plan_file(self, rel: str) -> Path:
         path = (self.dir / rel).resolve()
-        if not path.exists():
+        if not path.is_file():
             raise GenError(f"waiting on {rel}: the file does not exist yet")
-        media = self.state.setdefault("media", {})
-        key = hashlib.sha256(path.read_bytes()).hexdigest()
-        if key not in media:
-            log = self._log(f"upload_{path.stem}_{key[:8]}")
-            media[key] = {"id": self._hf().upload(path, log), "path": rel}
-            self._note_session(f"upload {rel}", log)
-        return media[key]["id"]
+        return path
 
-    def _hf(self) -> providers.HiggsfieldJobs:
-        if not self.higgsfield:
-            raise GenError('higgsfield.* lines need plan "higgsfield": {"cwd": "<folder with the MCP connected>"}')
-        return self.higgsfield
-
-    def _log(self, name: str) -> Path:
-        return self.hf_logs / f"{name}.jsonl"
-
-    def _note_session(self, label: str, log: Path) -> None:
-        final = self._hf().audit(log)["session"] or {}
-        self.state.setdefault("sessions", []).append({"label": label, "usd": final.get("total_cost_usd"), "turns": final.get("num_turns")})
-        self._save()
-
-    def quote_live(self, line_id: str) -> dict:
-        ln = self.lines[line_id]
-        if not ln["route"].startswith(HF_PREFIX):
-            raise GenError(f"line {line_id} is not a Higgsfield line")
-        fallback = (self.plan.get("higgsfield") or {}).get("quote_media")
-        params = self._resolve_for_quote(ln["body"]["params"], fallback)
-        log = self._log(f"quote_{line_id}_{len(self.state.setdefault('sessions', []))}")
-        credits = self._hf().quote(ln["body"]["tool"], params, log)
-        self._note_session(f"quote {line_id}", log)
-        self.state.setdefault("live_quotes", {})[line_id] = str(credits)
-        self._save()
-        return {"line": line_id, "credits": str(credits), "worst_case": ln["worst_case"], "fits": credits <= Decimal(str(ln["worst_case"]))}
-
-    def _resolve_for_quote(self, value, fallback):
-        """Prices a clip before its stills exist, by referencing a stand-in image of the same kind."""
-        if isinstance(value, dict):
-            return {k: self._resolve_for_quote(v, fallback) for k, v in value.items()}
-        if isinstance(value, list):
-            return [self._resolve_for_quote(v, fallback) for v in value]
-        m = re.fullmatch(r"<media (.+)>", value) if isinstance(value, str) else None
-        if m and fallback and not (self.dir / m.group(1)).resolve().exists():
-            value = f"<media {fallback}>"
-        return self.resolve(value)
+    def _service(self, ln: dict) -> services.HttpService | None:
+        route = ln["route"]
+        if not route.startswith(HTTP_PREFIX):
+            return None
+        if route not in self._services:
+            self._services[route] = services.get(route.removeprefix(HTTP_PREFIX))
+        return self._services[route]
 
     def run_line(self, line_id: str, reroll: str | None = None) -> dict:
         if line_id not in self.lines:
@@ -177,6 +137,9 @@ class Run:
         limit = min(ln.get("max_attempts", MAX_ATTEMPTS[ln["kind"]]), MAX_ATTEMPTS[ln["kind"]])
         if len(attempts) >= limit:
             raise GenError(f"line {line_id} has used its {limit} attempts: re-cast from existing footage or report the gap")
+        service = self._service(ln)
+        if service:
+            service.check_ready()
         family = ln["family"]
         if not ln.get("canary") and not self.state["canaries"].get(family):
             raise GenError(f"family {family!r} has no passed canary; run its canary line, look at it, then pass-canary")
@@ -194,48 +157,26 @@ class Run:
         self._save()
         return self._follow(ln, attempt)
 
-    def _follow_higgsfield(self, ln: dict, attempt: dict) -> dict:
-        """Never submits twice: a log that exists is read first, and a known job is only ever waited on."""
-        hf = self._hf()
-        log = self.dir / attempt["log"] if attempt.get("log") else None
-        if log and log.exists():
-            res = hf.audit(log)
-        else:
-            attempt["log"] = f"hf_logs/{ln['id']}_{attempt['n']}.jsonl"
-            self._save()
-            log = self.dir / attempt["log"]
-            body = attempt["body"]
-            res = hf.run_job(body["tool"], body["params"], Decimal(str(ln["worst_case"])), log)
-            self._note_session(f"job {ln['id']} #{attempt['n']}", log)
-        if res["job_id"] and res["status"] not in ("completed", *hf.FAILED):
-            log = self.dir / f"hf_logs/{ln['id']}_{attempt['n']}_follow.jsonl"
-            followed = hf.follow(res["job_id"], log)
-            self._note_session(f"follow {ln['id']} #{attempt['n']}", log)
-            res = {**res, "status": followed["status"], "url": followed["url"]}
-        attempt.update(task_id=res["job_id"], quote=res["quote"], balances=res["balances"], submissions=res["submissions"])
+    def _submit_http(self, ln: dict, attempt: dict, service: services.HttpService) -> None:
+        if attempt.get("submit_started") and not service.idempotent:
+            raise GenError(f"line {ln['id']}: an earlier submit to {ln['route']} may have created a job and this service has "
+                           "no idempotency_header, so sending it again could pay twice. Check the service by hand; the hold stays open")
+        attempt["submit_started"] = True
         self._save()
-        if res["submissions"] > 1:
-            raise GenError(f"line {ln['id']}: {res['submissions']} paid submissions in one session. The hold stays open; settle by hand")
-        if not res["submissions"]:
-            if not res["session"]:
-                raise GenError(f"line {ln['id']}: the session ended without a result and may have submitted. The hold stays open; "
-                               "check show_generations before re-running")
-            self.ledger.release(attempt["hold"], f"nothing submitted, quote {res['quote']}")
-            attempt.update(status=REFUSED, error=f"session submitted nothing; quote {res['quote']}, limit {ln['worst_case']}")
+        try:
+            sub = service.submit_body(attempt["body"], attempt["idempotency_key"])
+        except providers.SubmitRefused as e:
+            self.ledger.release(attempt["hold"], f"refused: {str(e)[:300]}")
+            attempt.update(status=REFUSED, error=str(e)[:600])
             self._save()
-            return attempt
-        if not res["job_id"]:
-            raise GenError(f"line {ln['id']}: submitted, but no job id recorded: {res['error']}. The hold stays open")
-        if res["status"] in hf.FAILED:
-            self.ledger.release(attempt["hold"], f"job {res['status']}", task=res["job_id"])
-            attempt.update(status=FAILED, error=f"job {res['status']}", note="A failed job is not proof of a refund: compare balances")
-            self._save()
-            return attempt
-        if res["status"] != "completed" or not res["url"]:
-            raise GenError(f"line {ln['id']}: job {res['job_id']} is {res['status']} with url {bool(res['url'])}; re-run to keep following")
-        return self._deliver(ln, attempt, res["url"], None if res["quote"] is None else Decimal(res["quote"]))
+            return
+        attempt.update(task_id=sub.task_id, submit_answer=sub.raw)
+        self._save()
 
     def _submit(self, ln: dict, attempt: dict) -> None:
+        service = self._service(ln)
+        if service:
+            return self._submit_http(ln, attempt, service)
         result, meta = self.treg.call(ln["route"], body=attempt["body"], idempotency_key=attempt["idempotency_key"])
         status = meta.get("http_status")
         if status is None or not 200 <= int(status) < 300:
@@ -244,7 +185,7 @@ class Run:
             self._save()
             return
         attempt["call_id"] = meta.get("call_id")
-        url = _find_url(result)
+        url = providers.find_url(result)
         if url:
             attempt.update(immediate_url=url)
         attempt["task_id"] = (result or {}).get("id") or (result or {}).get("task_id")
@@ -253,12 +194,10 @@ class Run:
         self._save()
 
     def _follow(self, ln: dict, attempt: dict) -> dict:
-        if ln["route"].startswith(HF_PREFIX):
-            return self._follow_higgsfield(ln, attempt)
         if not attempt.get("task_id") and not attempt.get("immediate_url"):
             try:
                 self._submit(ln, attempt)
-            except (providers.ProviderError, subprocess.TimeoutExpired) as e:
+            except (providers.ProviderError, subprocess.TimeoutExpired, FileNotFoundError) as e:
                 # A timeout does not prove no job exists: keep the hold; a re-run reuses the same idempotency key.
                 attempt["error"] = f"submit unconfirmed: {e}"
                 self._save()
@@ -272,7 +211,7 @@ class Run:
             if outcome.status == "succeeded":
                 url, charged = outcome.url, outcome.charged
                 if not url:
-                    url = _find_url(outcome.raw)
+                    url = providers.find_url(outcome.raw)
                 if not url:
                     raise GenError(f"line {ln['id']}: finished with no output URL: {json.dumps(outcome.raw)[:300]}")
             elif outcome.status == "failed":
@@ -283,14 +222,16 @@ class Run:
                 return attempt
             else:
                 if time.monotonic() > deadline:
-                    raise GenError(f"line {ln['id']}: still pending after {ln.get('timeout_s', 1500)} s; re-run to keep polling")
+                    raise GenError(f"line {ln['id']}: still pending after {ln.get('timeout_s', 1500)} s ({outcome.error or 'no error reported'}); re-run to keep polling")
                 self.sleep(ln.get("poll_s", 15))
         return self._deliver(ln, attempt, url, charged)
 
     def _deliver(self, ln: dict, attempt: dict, url: str, charged: Decimal | None) -> dict:
+        service = self._service(ln)
+        fetch = service.fetch if service else self.fetch
         dest = (self.dir.parent / ln["out"]).resolve() if not Path(ln["out"]).is_absolute() else Path(ln["out"])
         dest.parent.mkdir(parents=True, exist_ok=True)
-        self.fetch(url, dest)
+        fetch(url, dest)
         estimated = charged is None
         amount = Decimal(str(ln["worst_case"])) if estimated else Decimal(str(charged))
         self.ledger.settle(attempt["hold"], amount, task=attempt.get("task_id"), estimated=estimated)
@@ -303,6 +244,9 @@ class Run:
         return attempt
 
     def _poll(self, ln: dict, attempt: dict) -> providers.Outcome:
+        service = self._service(ln)
+        if service:
+            return service.poll(providers.Submission(ln["route"], attempt["task_id"], raw=attempt.get("submit_answer") or {}))
         tool, param = ln.get("poll_tool"), ln.get("poll_param", "id")
         parse = _parse_generic
         if ln["route"] in providers.ROUTES:
@@ -333,33 +277,14 @@ class Run:
             lines[line_id] = {"attempts": len(a), "status": a[-1]["status"] if a else "not started",
                               **({k: a[-1][k] for k in ("frames", "duration", "charged") if k in a[-1]} if a else {})}
         s = self.ledger.summary()
-        sessions = self.state.get("sessions", [])
-        return {"lines": lines, "canaries": self.state["canaries"], "charged": s["charged"], "held": s["held"], "available": s["available"],
-                "headless_usd": round(sum(x["usd"] or 0 for x in sessions), 4), "headless_sessions": len(sessions)}
-
-
-def _find_url(doc) -> str | None:
-    if isinstance(doc, str):
-        return doc if re.match(r"https?://", doc) else None
-    if isinstance(doc, list):
-        for v in doc:
-            if (u := _find_url(v)):
-                return u
-    if isinstance(doc, dict):
-        for k, v in doc.items():
-            if "url" in k.lower() and (u := _find_url(v)):
-                return u
-        for k in ("output", "data", "images", "result"):
-            if k in doc and (u := _find_url(doc[k])):
-                return u
-    return None
+        return {"lines": lines, "canaries": self.state["canaries"], "charged": s["charged"], "held": s["held"], "available": s["available"]}
 
 
 def _parse_generic(r: dict) -> providers.Outcome:
     status = (r or {}).get("status")
     if status in ("completed", "succeeded", "success"):
         credits = (r.get("usage") or {}).get("credits")
-        return providers.Outcome("succeeded", _find_url(r), None if credits is None else Decimal(str(credits)) / 1000, raw=r)
+        return providers.Outcome("succeeded", providers.find_url(r), None if credits is None else Decimal(str(credits)) / 1000, raw=r)
     if status in ("failed", "error", "cancelled"):
         return providers.Outcome("failed", error=str(r.get("error") or status)[:500], raw=r)
     return providers.Outcome("pending", raw=r)
@@ -370,13 +295,10 @@ def _fetch(url: str, dest: Path) -> None:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="gen", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="remix-studio gen", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("quote", "status"):
         sub.add_parser(name).add_argument("plan")
-    p = sub.add_parser("quote-live")
-    p.add_argument("plan")
-    p.add_argument("--line", required=True)
     p = sub.add_parser("run")
     p.add_argument("plan")
     p.add_argument("--line", required=True)
@@ -395,9 +317,6 @@ def main(argv=None) -> int:
         if a.cmd == "status":
             print(json.dumps(r.status(), indent=1))
             return 0
-        if a.cmd == "quote-live":
-            print(json.dumps(r.quote_live(a.line)))
-            return 0
         if a.cmd == "pass-canary":
             r.pass_canary(a.family, a.note)
             print(json.dumps({"family": a.family, "passed": True}))
@@ -405,7 +324,7 @@ def main(argv=None) -> int:
         res = r.run_line(a.line, a.reroll)
         print(json.dumps({k: v for k, v in res.items() if k not in ("body", "idempotency_key", "hold")}, indent=1))
         return 0 if res["status"] == DONE else 1
-    except (GenError, providers.ProviderError) as e:
+    except (GenError, providers.ProviderError, FileNotFoundError) as e:
         print(json.dumps({"error": str(e)}))
         return 1
 

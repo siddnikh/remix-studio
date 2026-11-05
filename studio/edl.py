@@ -3,12 +3,12 @@
 `validate` turns EDL JSON into a Plan or reports every problem at once. `render` builds exact-length shot
 segments, joins them, applies the grade and flashes, then draws text as a separate final pass and mixes
 recorded audio. `check` inspects a rendered file for black, white, frozen and repeated frames, bars, wrong
-length and audio faults. Format reference: skills/remix/references/edl.md.
+length and audio faults. Format reference: references/edl.md in the remix skill.
 
-    python -m studio.edl validate edit.json
-    python -m studio.edl render edit.json --preview -o runs/x/preview.mp4
-    python -m studio.edl render edit.json -o runs/x/final.mp4
-    python -m studio.edl check runs/x/final.mp4 --edl edit.json
+    remix-studio edl validate edit.json
+    remix-studio edl render edit.json --preview -o runs/x/preview.mp4
+    remix-studio edl render edit.json -o runs/x/final.mp4
+    remix-studio edl check runs/x/final.mp4 --edl edit.json
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from studio import analyze, fx
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}
 SR = 48000
-MATTE_SOURCE = Path(__file__).resolve().parents[1] / "skills" / "remix" / "scripts" / "matte.m"
+MATTE_SOURCE = Path(__file__).resolve().with_name("matte.m")
 TRUE_PEAK_LIMIT_DB = -1.0
 THREADS = str(int(os.environ.get("STUDIO_THREADS", "4")))
 

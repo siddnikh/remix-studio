@@ -7,13 +7,13 @@ Real recordings only. Code may trim, align, mix, fade and limit. It never makes 
 1. **The user's supplied track** or footage audio.
 2. **The reference's own audio**, if it fits and the user has the rights or the work stays private. Say which.
 3. **A CC0 recording** chosen for tempo and mood. Bundled excerpt below; more at Free Music Archive (filter by CC0) or by searching the artist HoliznaCC0. Read the licence on the track's own page; an artist's other tracks may differ.
-4. **None**, with `none_reason`, if nothing fits. Report it: K1 in `docs/SPEC.md` requires audio.
+4. **None**, with `none_reason`, if nothing fits. Report it: K1 in the spec requires audio.
 
 Never fetch music from TikTok or similar for delivery without checking the rights.
 
 ## Placing it
 
-Measure the track's beat grid before writing the EDL with `python -m studio.analyze beats track.mp3`, then cut to it. On the bundled excerpt, strong hits fall about every second from 0.11 s, with a 120 BPM pulse: `"in": 0.11` puts a beat on frame 0 and every 12 frames at 24 fps. Those figures are measurements of the waveform; nobody has listened to this excerpt yet, so someone should before it ships.
+Measure the track's beat grid before writing the EDL with `remix-studio analyze beats track.mp3`, then cut to it. On the bundled excerpt, strong hits fall about every second from 0.11 s, with a 120 BPM pulse: `"in": 0.11` puts a beat on frame 0 and every 12 frames at 24 fps. Those figures are measurements of the waveform; nobody has listened to this excerpt yet, so someone should before it ships.
 
 Hits go on planned visual events only: a flash or whip, not every cut. Keep them under the music, starting around -5 to -10 dB. Swishes lead a whip: put the cue at the whip's midpoint. Source effects already baked into retained audio shouldn't be doubled.
 

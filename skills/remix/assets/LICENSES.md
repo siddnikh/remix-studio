@@ -20,4 +20,4 @@ All retrieved 2026-11-05. Licences as stated on each source page at that date. N
 
 ## Footage
 
-None bundled. The demo in `runs/edl-demo/` uses local Higgsfield test clips and is git-ignored.
+None bundled.

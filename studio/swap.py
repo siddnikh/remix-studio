@@ -1,4 +1,4 @@
-"""Genjutsu-equivalent pipeline: source video + subject image(s) + shot list -> subject-swapped video.
+"""Subject swap: source video + subject image(s) + shot list -> subject-swapped video.
 
 Steps: normalise the source, extract frames and cuts, compose a shot-by-shot prompt, submit, download,
 enforce duration, score. `prepare` spends nothing and produces the contact sheet that a prompt author
@@ -14,16 +14,15 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Protocol
 
 import cv2
 import numpy as np
 
-from . import analyze, score
+from . import analyze, score, services
 from .ledger import Ledger
-from .providers import HiggsfieldHeadless, Job, Provider, ProviderError, Submission, SubmitRefused, Treg, get_route
+from .providers import Job, Provider, ProviderError, Submission, SubmitRefused, Treg, get_route
 
 FPS = 24
 CUT_TOL_S = 0.2
@@ -175,7 +174,7 @@ class Composer(Protocol):
 
 
 class ShotListFile:
-    """A shot list someone wrote after viewing the contact sheet. This is how the Claude Code skill drives it."""
+    """A shot list someone wrote after viewing the contact sheet. This is how an agent following the skill drives it."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -427,28 +426,21 @@ def run(cfg: RunConfig, composer: Composer, provider: Provider, ledger: Ledger) 
 
 # ---------------------------------------------------------------- CLI
 
-def _provider(a) -> Provider:
-    if a.route == "higgsfield":
-        return HiggsfieldHeadless(a.hf_cwd, a.hf_video_media, a.hf_image_media, Decimal(a.hf_floor), Decimal(a.hf_max),
-                                  Path(a.run_dir) / "session.jsonl", mode=a.hf_mode,
-                                  also_quote=tuple(a.hf_also_quote))
-    return get_route(a.route)
-
-
 def _resolve_urls(a) -> tuple[str, tuple[str, ...]]:
-    if a.route == "higgsfield":
-        return a.hf_video_media, (a.hf_image_media,)
+    if a.inline:
+        return (services.data_uri(Path(a.run_dir) / "source.mp4"), tuple(services.data_uri(p) for p in a.subject))
     if a.host_public:
         treg = Treg()
         return treg.host(Path(a.run_dir) / "source.mp4")["url"], tuple(treg.host(p)["url"] for p in a.subject)
     if not (a.video_url and a.image_url):
-        raise PipelineError("pass --video-url and --image-url, or --host-public --subject FILE to make the "
-                            "source and subject publicly readable for 7 days")
+        raise PipelineError("pass --video-url and --image-url; or --inline --subject FILE to send the files inside the "
+                            "request, if the service accepts data URIs; or --host-public --subject FILE to make them "
+                            "publicly readable for 7 days through treg")
     return a.video_url, tuple(a.image_url)
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="genjutsu", description=__doc__)
+    ap = argparse.ArgumentParser(prog="remix-studio swap", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("prepare", help="normalise and analyse; spends nothing")
     p.add_argument("source"); p.add_argument("--run-dir", required=True); p.add_argument("--seconds", type=int)
@@ -456,11 +448,9 @@ def main(argv=None) -> int:
     def job_args(p):
         p.add_argument("--run-dir", required=True); p.add_argument("--shot-list", required=True)
         p.add_argument("--route", required=True); p.add_argument("--video-url"); p.add_argument("--image-url", action="append")
-        p.add_argument("--host-public", action="store_true"); p.add_argument("--subject", action="append", default=[])
+        p.add_argument("--host-public", action="store_true"); p.add_argument("--inline", action="store_true")
+        p.add_argument("--subject", action="append", default=[])
         p.add_argument("--resolution", default="480p"); p.add_argument("--aspect-ratio"); p.add_argument("--task", default="reference")
-        p.add_argument("--hf-cwd"); p.add_argument("--hf-video-media"); p.add_argument("--hf-image-media")
-        p.add_argument("--hf-floor", default="87"); p.add_argument("--hf-max", default="15"); p.add_argument("--hf-mode", default="omni_reference")
-        p.add_argument("--hf-also-quote", action="append", default=[], metavar="MODE")
 
     p = sub.add_parser("quote", help="show what a run would cost; spends nothing"); job_args(p)
     p = sub.add_parser("run", help="submit, download, enforce duration, score; spends"); job_args(p)
@@ -477,7 +467,7 @@ def main(argv=None) -> int:
         elif a.cmd == "compare":
             print(json.dumps(compare_sheet(dict(v.split("=", 1) for v in a.videos), a.out_png, a.fps)))
         else:
-            prov = _provider(a)
+            prov = get_route(a.route)
             video_url, image_urls = _resolve_urls(a)
             cfg = RunConfig(Path(a.run_dir) / "source.mp4", Path(a.run_dir), video_url, image_urls, a.resolution,
                             a.aspect_ratio, a.task)
@@ -495,7 +485,7 @@ def main(argv=None) -> int:
                                   "duration": rep["duration"], "ledger": rep["ledger"], "cut_warnings": rep["cut_warnings"]},
                                  indent=1, default=str))
                 print(score.table(rep["score"]), file=sys.stderr)
-    except (PipelineError, ProviderError, ValueError) as e:
+    except (PipelineError, ProviderError, ValueError, FileNotFoundError) as e:
         print(f"{type(e).__name__}: {e}", file=sys.stderr)
         return 1
     return 0

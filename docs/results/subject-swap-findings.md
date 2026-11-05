@@ -164,7 +164,7 @@ fails a fixed-duration job it classifies as an edit. D's reference-style wording
 - **Live, partial:** the OpenRouter adapter reached ByteDance and handled a refusal. Its polling and video retrieval have
   never run against a real task, and its $0.49 price is arithmetic from the rate card, not an observed charge.
 - **Not run live beyond the balance refusals:** reAPI and PiAPI. Their response parsing follows catalog examples only.
-- **Other repos:** `git status` in devi-ai is the same before and after the session.
+- **Other repos:** `git status` in the other project is the same before and after the session.
 
 ## Adjacent issues
 

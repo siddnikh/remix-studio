@@ -1,6 +1,6 @@
 # EDL format
 
-JSON, version 1. Paths are relative to the EDL file. Unknown keys are errors; keys starting with `_` are comments. Run `python -m studio.edl validate` to get every problem at once.
+JSON, version 1. Paths are relative to the EDL file. Unknown keys are errors; keys starting with `_` are comments. Run `remix-studio edl validate` to get every problem at once.
 
 **Times:** a number means seconds; `"f123"` means an exact frame. Shot `in`/`out` count source frames; everything else counts output frames. Prefer frames: they are what you saw on the sheet.
 
@@ -25,7 +25,7 @@ JSON, version 1. Paths are relative to the EDL file. Unknown keys are errors; ke
                 "push": {"from": 1.0, "to": 1.05}}}
   ],
   "text": [
-    {"text": "SAME ROUTINE", "font": "../../../skills/remix/assets/fonts/Anton-Regular.ttf",
+    {"text": "SAME ROUTINE", "font": "/abs/path/from/remix-studio-where/fonts/Anton-Regular.ttf",
      "start": "f6", "end": "f36", "x": 0.5, "y": 0.17, "size": 0.085, "anim": "slam", "border": 0.05}
   ],
   "audio": {
@@ -74,7 +74,7 @@ The total of shot frames must equal `canvas.frames` exactly. A clip stretched to
 
 `text` (one line), `font` (a file; required, no fallback exists), `start`, `end`, `x`, `y` (centre), `size` (fraction of height), `color`, `border` and `shadow` (fraction of the font size), `border_color`, `box` (`#000000@0.6`), `anim`, `fade_out` (frames), `behind`.
 
-`behind: true` puts the word between the background and the subject. Set a top-level `"matte": "../matte.mkv"`, then run `python -m studio.edl matte edit.json` once the picture is settled. It masks the finished picture on those frames with macOS's Vision framework (macOS 14 or later, plus clang; nothing is downloaded). Rendering refuses a matte made for a different picture, so re-run it after any change to shots, camera or grade; wording, timing within the same frames and audio don't need it unless the frames covered change. Look at the edges: the mask finds the most salient subject, and it can follow a large foreground object instead. Faces stay untouched, because the subject's pixels are the picture's own.
+`behind: true` puts the word between the background and the subject. Set a top-level `"matte": "../matte.mkv"`, then run `remix-studio edl matte edit.json` once the picture is settled. It masks the finished picture on those frames with macOS's Vision framework (macOS 14 or later, plus clang; nothing is downloaded). Rendering refuses a matte made for a different picture, so re-run it after any change to shots, camera or grade; wording, timing within the same frames and audio don't need it unless the frames covered change. Look at the edges: the mask finds the most salient subject, and it can follow a large foreground object instead. Faces stay untouched, because the subject's pixels are the picture's own.
 
 `anim`: `none`, `pop`, `slam`, `slide_up`, `flicker`, `typewriter`. Validation refuses a missing glyph or a line that would be clipped. Rendering confirms each event changed pixels.
 

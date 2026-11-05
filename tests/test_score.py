@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -11,7 +12,7 @@ import pytest
 from studio import score
 from test_analyze import FPS, make_video
 
-SCRATCH = Path("/private/tmp/claude-501/-Users-siddnikh-Development-automations-rea/3397b306-c87c-4176-b3de-7e4b6515ebdf/scratchpad/tests")
+SCRATCH = Path(os.environ.get("REMIX_STUDIO_EVAL_CLIPS", "/nonexistent"))
 BASELINES = Path(__file__).resolve().parents[1] / "docs" / "baselines.json"
 
 

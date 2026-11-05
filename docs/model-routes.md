@@ -69,10 +69,6 @@ These were free, because the requests never created a task.
 The earlier assumption that this route cannot take a video is therefore out of date. It can take one, but its default
 filter refuses clips that show a realistic person, and its fixed durations rule out an edit task.
 
-## Higgsfield's own models
-
-Not in treg's catalog. `gen.py` runs any Higgsfield image or video model as a `higgsfield.*` line (see `skills/remix/references/generation.md`). Free `get_cost` quotes on 2026-11-05: `gpt_image_2_5` 1k at 0.25 credits (low) and 0.5 (medium); `seedance_2_5` `omni_reference`, 480p, 4 s, no audio, at 12 credits. The dollar price of a credit is still not in our evidence.
-
 ## Verdict for this job
 
 No route in the catalog can run the realistic test clip today. The routes that accept the clip's content need more

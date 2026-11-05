@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import subprocess
 from pathlib import Path
@@ -6,10 +5,9 @@ from pathlib import Path
 import pytest
 from decimal import Decimal
 
+from studio import gen, providers
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("gen", ROOT / "skills" / "remix" / "scripts" / "gen.py")
-gen = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(gen)
 
 VIDEO = "reapi.video-gen.seedance-2-5"
 IMAGE = "reapi.image-gen.gpt-image-2-5"
@@ -190,6 +188,7 @@ def test_hosting_a_local_file_needs_recorded_consent(tmp_path):
     with pytest.raises(gen.GenError, match="hosting_consent"):
         make(tmp_path, [line], treg=t).run_line("c1")
     assert Host.hosted == 0 and t.submits == []
+    (tmp_path / "subject.png").write_bytes(b"x")
     assert make(tmp_path, [line], treg=t, hosting_consent=True).run_line("c1")["status"] == "done"
     assert t.submits[0][1]["image_urls"] == ["https://host/x.png"]
 
@@ -228,105 +227,6 @@ def test_documented_plan_is_valid_and_gates_as_described(tmp_path):
 
 
 def test_find_url_reads_common_shapes():
-    assert gen._find_url({"output": {"image_urls": ["https://a/b.png"]}}) == "https://a/b.png"
-    assert gen._find_url({"data": [{"url": "https://a/c.png"}]}) == "https://a/c.png"
-    assert gen._find_url({"status": "processing"}) is None
-
-
-class FakeHiggsfield:
-    """Stands in for the headless sessions: it returns audited facts, so the test proves what gen.py does with them."""
-    FAILED = ("failed", "nsfw")
-
-    def __init__(self, results):
-        self.results, self.jobs, self.follows, self.uploads = list(results), [], [], []
-        self.by_log = {}
-
-    def audit(self, log):
-        return self.by_log.get(str(log), {"session": {"total_cost_usd": 0.01, "num_turns": 3}, "job_id": None, "status": None, "url": None,
-                                          "quote": None, "submissions": 0, "balances": [], "error": None})
-
-    def run_job(self, tool, params, max_credits, log):
-        self.jobs.append((tool, params, max_credits))
-        res = self.results.pop(0)
-        self.by_log[str(log)] = res
-        Path(log).parent.mkdir(parents=True, exist_ok=True)
-        Path(log).write_text("")
-        return res
-
-    def follow(self, job_id, log):
-        self.follows.append(job_id)
-        return self.results.pop(0)
-
-    def upload(self, path, log):
-        self.uploads.append(str(path))
-        return f"media{len(self.uploads)}"
-
-
-def hf_result(status="completed", submissions=1, job="j1", url="https://x/a.mp4", quote="12"):
-    return {"job_id": job, "status": status, "url": url, "quote": quote, "submissions": submissions, "balances": ["90", "78"],
-            "error": None, "session": {"total_cost_usd": 0.02, "num_turns": 5}}
-
-
-def hf_line(id="c1", worst=12, **kw):
-    return {"id": id, "kind": "clip", "family": "fox", "canary": True, "route": "higgsfield.seedance_2_5", "worst_case": worst,
-            "body": {"tool": "generate_video", "params": {"model": "seedance_2_5", "prompt": "p"}}, "out": f"clips/{id}.mp4", **kw}
-
-
-def hf_run(tmp, lines, results, cap=30):
-    fake = FakeHiggsfield(results)
-    r = gen.Run(write_plan(tmp, lines, cap=cap, currency="credits"), treg=FakeTreg(), sleep=lambda s: None, fetch=fetch_clip, higgsfield=fake)
-    return r, fake
-
-
-def test_higgsfield_settles_at_the_jobs_quote_not_the_account_balance(tmp_path):
-    r, fake = hf_run(tmp_path, [hf_line()], [hf_result(quote="11.5")])
-    a = r.run_line("c1")
-    assert a["status"] == "done" and a["charged"] == "11.5"
-    assert Decimal(r.ledger.summary()["charged"]) == Decimal("11.5")
-
-
-def test_higgsfield_rerun_reads_the_log_and_does_not_pay_twice(tmp_path):
-    r, fake = hf_run(tmp_path, [hf_line()], [hf_result(status="in_progress", url=None), hf_result(status="in_progress", url=None)])
-    with pytest.raises(gen.GenError, match="keep following"):
-        r.run_line("c1")
-    assert len(fake.jobs) == 1 and fake.follows == ["j1"]
-    fake.results.append(hf_result())
-    a = r.run_line("c1")
-    assert a["status"] == "done" and len(fake.jobs) == 1 and fake.follows == ["j1", "j1"]
-
-
-def test_higgsfield_session_without_a_result_keeps_the_hold(tmp_path):
-    r, fake = hf_run(tmp_path, [hf_line()], [{**hf_result(status=None, submissions=0, job=None, url=None), "session": None}])
-    with pytest.raises(gen.GenError, match="may have submitted"):
-        r.run_line("c1")
-    assert Decimal(r.ledger.summary()["held"]) == 12
-
-
-def test_higgsfield_quote_over_limit_submits_nothing_and_releases(tmp_path):
-    r, fake = hf_run(tmp_path, [hf_line()], [hf_result(status=None, submissions=0, job=None, url=None, quote="15")])
-    a = r.run_line("c1")
-    assert a["status"] == "refused" and Decimal(r.ledger.summary()["held"]) == 0
-
-
-def test_higgsfield_two_submissions_in_a_session_keeps_the_hold(tmp_path):
-    r, fake = hf_run(tmp_path, [hf_line()], [hf_result(submissions=2)])
-    with pytest.raises(gen.GenError, match="2 paid submissions"):
-        r.run_line("c1")
-    assert Decimal(r.ledger.summary()["held"]) == 12
-
-
-def test_media_placeholder_uploads_once_per_file_content(tmp_path):
-    r, fake = hf_run(tmp_path, [hf_line()], [])
-    (tmp_path / "plan").mkdir(exist_ok=True)
-    (tmp_path / "plan" / "s.png").write_bytes(b"x")
-    assert r.resolve(["<media s.png>", "<media s.png>"]) == ["media1", "media1"]
-    assert len(fake.uploads) == 1
-    with pytest.raises(gen.GenError, match="does not exist"):
-        r.resolve("<media missing.png>")
-
-
-def test_higgsfield_cap_is_enforced_before_any_session(tmp_path):
-    r, fake = hf_run(tmp_path, [hf_line(worst=31)], [hf_result()])
-    with pytest.raises(gen.GenError):
-        r.run_line("c1")
-    assert fake.jobs == []
+    assert providers.find_url({"output": {"image_urls": ["https://a/b.png"]}}) == "https://a/b.png"
+    assert providers.find_url({"data": [{"url": "https://a/c.png"}]}) == "https://a/c.png"
+    assert providers.find_url({"status": "processing"}) is None

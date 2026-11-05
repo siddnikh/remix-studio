@@ -1,6 +1,6 @@
 # Craft lessons
 
-What makes this kind of output good or bad. Figures are from Higgsfield's recorded runs unless marked "ours"; treat them as warnings about failure modes, not as measurements of the routes we use.
+What makes this kind of output good or bad. Figures come from recorded runs on other pipelines unless marked "ours"; treat them as warnings about failure modes, not as measurements of the route you use.
 
 ## Identity
 
@@ -37,7 +37,7 @@ Code may cut, retime, move the whole plate, grade the whole shot, and add separa
 - Turn generated audio off, and keep music and effects out of the prompt.
 - Suggestive wording with an audio reference was refused on every attempt, and copyrighted costumes on most. **Don't reword or switch model to get around a refusal.** Change the plan or report the gap.
 
-## Motion transfer inputs (studio/genjutsu.py)
+## Motion transfer inputs (subject-swap skill)
 
 - Keep prompts to one or two short sentences, under about 40 words; the references carry the rest.
 - Clips under about 4 s were rejected. Non-whole-second clips were truncated or extended with invented shots. Convert to 24 fps before padding, or the bill rises and motion slows.

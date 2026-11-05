@@ -9,3 +9,5 @@ runs/
 .edl-cache/
 *.egg-info/
 build/
+
+!docs/results/*.mp4

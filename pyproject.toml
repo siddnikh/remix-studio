@@ -1,8 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "remix-studio"
-version = "0.1.0"
+version = "0.2.0"
+description = "Video remix and subject-swap skills for coding agents: measure a reference, generate through any API, render with ffmpeg, score the result."
+readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["numpy", "opencv-python-headless", "pytest"]
+dependencies = ["numpy", "opencv-python-headless"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+remix-studio = "studio.cli:main"
 
 [tool.setuptools]
 packages = ["studio"]
+
+[tool.setuptools.package-data]
+studio = ["matte.m"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

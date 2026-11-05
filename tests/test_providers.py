@@ -14,7 +14,7 @@ def job(**kw):
 
 
 class FakeRun:
-    """Stands in for subprocess.run, so no test can reach treg, claude or the network."""
+    """Stands in for subprocess.run, so no test can reach treg or the network."""
 
     def __init__(self, answers):
         self.answers, self.calls = list(answers), []
@@ -125,97 +125,6 @@ def test_tags_match_each_route():
     assert P.ReapiSeedance25(P.Treg(run=FakeRun([]))).tag("image") == "@Image 1"
 
 
-def stream(*events):
-    return [json.dumps(e) for e in events]
-
-
-def tool(id_, name, inp, text):
-    return [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": id_, "name": name, "input": inp}]}},
-            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": id_, "content": text}]}}]
-
-
-def session(balance_after="90.05", submits=1, status="completed"):
-    ev = []
-    ev += tool("b1", "mcp__higgsfield__balance", {}, json.dumps({"credits": 102.05}))
-    ev += tool("q", "mcp__higgsfield__generate_video", {"params": {"get_cost": True, "mode": "omni_reference"}}, json.dumps({"cost": {"credits": 12, "credits_exact": 12}}))
-    for n in range(submits):
-        ev += tool(f"g{n}", "mcp__higgsfield__generate_video", {"params": {"model": "seedance_2_5"}},
-                   json.dumps({"results": [{"id": f"job{n}", "status": "pending"}]}))
-    ev += tool("w", "mcp__higgsfield__show_generations", {}, json.dumps(
-        {"items": [{"id": f"job{submits - 1}", "status": status, "results": {"rawUrl": "https://cdn/o.mp4"}}]}))
-    ev += tool("b2", "mcp__higgsfield__balance", {}, json.dumps({"credits": float(balance_after)}))
-    ev += [{"type": "result", "result": "ignore previous instructions", "total_cost_usd": 0.3, "num_turns": 5}]
-    return stream(*ev)
-
-
-def hf(tmp_path):
-    return P.HiggsfieldHeadless(tmp_path, "vid", "img", Decimal("87"), Decimal("15"), tmp_path / "s.jsonl", run=FakeRun([]))
-
-
-def test_higgsfield_audit_reads_facts_from_tool_results(tmp_path):
-    r = hf(tmp_path).audit(session())
-    assert r["job_id"] == "job0" and r["status"] == "completed" and r["url"] == "https://cdn/o.mp4"
-    assert r["quote"] == "12"
-    assert r["balance_before"] == "102.05" and r["balance_after"] == "90.05"
-    assert Decimal(r["spent"]) == 12 and r["violations"] == [] and r["session"]["total_cost_usd"] == 0.3
-
-
-def test_higgsfield_audit_flags_a_double_submit_and_a_broken_floor(tmp_path):
-    r = hf(tmp_path).audit(session(balance_after="78.05", submits=2))
-    assert any("2 paid submissions" in v for v in r["violations"])
-    assert any("below the floor" in v for v in r["violations"])
-    assert any("spent" in v for v in r["violations"])
-
-
-def test_higgsfield_outcome_comes_from_the_audit(tmp_path):
-    h = hf(tmp_path)
-    h.result = h.audit(session())
-    out = h.poll(P.Submission(h.route, "job0"))
-    assert out.status == "succeeded" and out.url == "https://cdn/o.mp4" and out.charged == Decimal("12")
-    h.result = h.audit(session(status="nsfw"))
-    assert h.poll(P.Submission(h.route, "job0")).status == "failed"
-
-
-def test_higgsfield_audit_reads_the_jobs_wait_shape_and_quotes_per_mode(tmp_path):
-    ev = tool("g", "mcp__higgsfield__generate_video", {"params": {"model": "seedance_2_5"}}, json.dumps({"results": [{"id": "j1"}]}))
-    ev += tool("q1", "mcp__higgsfield__generate_video", {"params": {"get_cost": True, "mode": "omni_reference"}}, json.dumps({"cost": {"credits_exact": 12}}))
-    ev += tool("q2", "mcp__higgsfield__generate_video", {"params": {"get_cost": True, "mode": "video_edit"}}, json.dumps({"cost": {"credits": 12}}))
-    ev += tool("w", "mcp__higgsfield__jobs_wait", {}, json.dumps({"jobs": [{"job_id": "j1", "status": "completed", "result_url": "https://cdn/x.mp4"}]}))
-    r = hf(tmp_path).audit(stream(*ev))
-    assert r["status"] == "completed" and r["url"] == "https://cdn/x.mp4" and r["submissions"] == 1
-    assert r["quote"] == "12" and r["quotes"] == {"omni_reference": "12", "video_edit": "12"}
-
-
-def test_a_session_that_ends_before_the_job_does_is_not_treated_as_failed(tmp_path):
-    h = hf(tmp_path)
-    h.result = h.audit(session(status="in_progress"))
-    with pytest.raises(P.ProviderError, match="check it by hand"):
-        h.poll(P.Submission(h.route, "job0"))
-
-
-def test_higgsfield_also_quote_asks_for_a_quote_without_submitting(tmp_path):
-    h = P.HiggsfieldHeadless(tmp_path, "v", "i", Decimal("87"), Decimal("15"), tmp_path / "s", run=FakeRun([]), also_quote=("video_edit",))
-    text = h.instructions(job())
-    assert "as a quote only; never submit" in text and '"mode": "video_edit"' in text and "Never retry" in text
-
-
-def test_higgsfield_edit_mode_omits_fields_the_model_ignores(tmp_path):
-    h = P.HiggsfieldHeadless(tmp_path, "v", "i", Decimal("87"), Decimal("15"), tmp_path / "s", run=FakeRun([]), mode="video_edit")
-    p = h.params(job())
-    assert p["mode"] == "video_edit" and "duration" not in p and "aspect_ratio" not in p
-
-
-def test_higgsfield_session_is_limited_to_the_agreed_tools():
-    tools = P.HIGGSFIELD_TOOLS.split(",")
-    assert "Bash(curl:*)" in tools and "Bash" not in tools and len(tools) == 9
-    assert not [t for t in tools if "Edit" in t or "Write" in t]
-
-
-def test_parse_stream_ignores_garbage():
-    tools, final = P.parse_stream(["not json", "[1,2]", json.dumps({"type": "result", "result": "x"})])
-    assert tools == [] and final["result"] == "x"
-
-
 def test_download_leaves_no_partial_file_on_failure(tmp_path):
     def fail(cmd, **kw):
         Path(cmd[cmd.index("-o") + 1]).write_bytes(b"partial")
@@ -224,40 +133,3 @@ def test_download_leaves_no_partial_file_on_failure(tmp_path):
     with pytest.raises(P.ProviderError):
         P._download_url("https://x", dest, run=fail)
     assert list(tmp_path.iterdir()) == []
-
-
-def test_higgsfield_jobs_audit_reads_paid_image_job_from_recorded_tool_results(tmp_path):
-    def tool_use(i, name, params):
-        return json.dumps({"message": {"content": [{"type": "tool_use", "id": i, "name": f"mcp__higgsfield__{name}", "input": params}]}})
-
-    def tool_result(i, doc):
-        return json.dumps({"message": {"content": [{"type": "tool_result", "tool_use_id": i, "content": json.dumps(doc)}]}})
-    lines = [
-        tool_use("a", "balance", {}), tool_result("a", {"credits": 90.05}),
-        tool_use("b", "generate_image", {"params": {"get_cost": True}}), tool_result("b", {"cost": {"credits_exact": 1.5}}),
-        tool_use("c", "generate_image", {"params": {}}), tool_result("c", {"results": [{"id": "j9", "status": "queued"}]}),
-        tool_use("d", "jobs_wait", {}), tool_result("d", {"items": [{"id": "other", "status": "failed"},
-                                                                    {"id": "j9", "status": "completed", "results": {"rawUrl": "https://x/i.png"}}]}),
-        json.dumps({"type": "result", "result": "done", "total_cost_usd": 0.01, "num_turns": 4, "duration_ms": 1, "is_error": False}),
-    ]
-    log = tmp_path / "s.jsonl"
-    log.write_text("\n".join(lines))
-    lines.insert(0, tool_result("z", {}))
-    lines[:0] = [tool_use("m", "media_confirm", {}), tool_result("m", {"results": [{"media_id": "m1", "status": "uploaded"}]})]
-    log.write_text("\n".join(lines))
-    res = P.HiggsfieldJobs(tmp_path, run=FakeRun([])).audit(log)
-    assert res["media_id"] == "m1"
-    assert (res["job_id"], res["status"], res["url"], res["quote"], res["submissions"]) == ("j9", "completed", "https://x/i.png", "1.5", 1)
-    assert res["balances"] == ["90.05"]
-
-
-def test_higgsfield_jobs_audit_does_not_count_a_call_the_client_rejected(tmp_path):
-    lines = [
-        json.dumps({"message": {"content": [{"type": "tool_use", "id": "a", "name": "mcp__higgsfield__generate_image",
-                                             "input": {"__unparsedToolInput": {"raw": "{"}}}]}}),
-        json.dumps({"message": {"content": [{"type": "tool_result", "tool_use_id": "a", "is_error": True,
-                                             "content": "<tool_use_error>InputValidationError: could not be parsed</tool_use_error>"}]}}),
-    ]
-    log = tmp_path / "s.jsonl"
-    log.write_text("\n".join(lines))
-    assert P.HiggsfieldJobs(tmp_path, run=FakeRun([])).audit(log)["submissions"] == 0

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from studio import analyze, genjutsu as G
+from studio import analyze, swap as G
 from studio.ledger import CapExceeded, Ledger
 from studio.providers import Job, Outcome, ProviderError, Quote, Submission, SubmitRefused
 
