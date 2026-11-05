@@ -187,13 +187,7 @@ tests/                 no test spends money
 
 The suite takes about 3 minutes. Tests that need the original evaluation clips run only when `REMIX_STUDIO_EVAL_CLIPS` points at them.
 
-## Before making this repo public
-
-This repo is private and has no licence yet. Three things need a decision first:
-
-- **Higgsfield's terms.** A third-party summary reports no-reverse-engineering and no-competing-products clauses, which we haven't checked on their live page. This project was built by studying how their products behave, and `skills/remix/references/craft.md` paraphrases lessons learned from them. No Higgsfield scripts are included.
-- **Footage in `docs/results/`.** The comparison video and sheets contain a sample clip showing a real person, plus Higgsfield's output. We don't hold rights to these, so remove them from the repo and its history before publishing.
-- **Git history.** The `baseline-with-higgsfield-adapter` tag and first commit contain the removed adapter and earlier notes.
+## Final notes
 
 Bundled music, sound effects and fonts have their own licences, listed in [skills/remix/assets/LICENSES.md](skills/remix/assets/LICENSES.md).
 
