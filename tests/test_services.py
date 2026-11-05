@@ -303,11 +303,163 @@ def test_read_path():
     assert services.read_path(doc, "c.d") is None
 
 
-def test_bundled_example_is_valid_configuration(monkeypatch, tmp_path):
-    example = Path(__file__).parents[1] / "examples" / "services.example.json"
-    monkeypatch.setenv("REMIX_STUDIO_HOME", str(tmp_path))
-    (tmp_path / "services.json").write_text(example.read_text())
-    names = services.load_all()
-    assert set(names) == {"replicate", "fal"}
-    for name in names:
-        assert services.get(name).required_env()
+def test_user_file_replaces_a_builtin_service_by_name(home, api):
+    assert {"sume", "sume-image", "sume-remix"} <= set(services.load_all())
+    write_service(home, config(api), name="sume")
+    assert services.get("sume").cfg["submit"]["url"].startswith(api.base)
+    assert "sume-image" in services.load_all()
+
+
+class SumeApi(BaseHTTPRequestHandler):
+    """Answers with the JSON shapes in Sume's docs. Its URLs replace api.sume.com, nothing else in the config changes."""
+    state = None
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, doc):
+        raw = json.dumps(doc).encode()
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_PUT(self):
+        st = self.state
+        st["put"] = {"bytes": self.rfile.read(int(self.headers["Content-Length"])), "auth": self.headers.get("Authorization"), "type": self.headers.get("content-type")}
+        self._send(200, {})
+
+    def do_POST(self):
+        st = self.state
+        doc = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path == "/v1/open/estimate":
+            st["estimates"].append(doc)
+            if st.get("estimate_error"):
+                return self._send(400, {"error": {"code": "media_unreadable", "message": st["estimate_error"]}})
+            return self._send(200, {"data": {"model": doc["model"], "currency": "USD", "usd": st.get("usd", "0.4919"), "usd_micros": 491900}})
+        if self.path == "/v1/files/generate-upload-url":
+            st["uploads"].append(doc)
+            n = len(st["uploads"])
+            return self._send(201, {"data": {"public_url": f"https://media.example/assets/a{n}/source", "upload_url": f"{st['base']}/signed/{n}",
+                                             "upload_method": "PUT", "upload_headers": {"content-type": doc["content_type"], "content-length": str(doc["size_bytes"])}}})
+        st["submits"].append({"path": self.path, "body": doc, "auth": self.headers.get("Authorization"), "idem": self.headers.get("Idempotency-Key")})
+        if st.get("submit_error"):
+            return self._send(st["submit_error"][0], {"error": {"code": "x", "message": st["submit_error"][1]}})
+        self._send(202, {"data": {"request_id": "job_1", "job": {"id": "job_1", "status": "queued", "result": None, "error": None},
+                                  "status_url": "unused", "next_action": "poll_status", "terminal": False, "idempotency_hit": False}})
+
+    def do_GET(self):
+        st = self.state
+        if self.path == "/v1/jobs/job_1/status":
+            status = st["statuses"].pop(0) if len(st["statuses"]) > 1 else st["statuses"][0]
+            return self._send(200, {"data": {"job_id": "job_1", "status": status, "sume_status": status.lower(), "terminal": status in ("COMPLETED", "FAILED", "CANCELED")}})
+        if self.path == "/v1/jobs/job_1/result":
+            if st["statuses"][-1] == "FAILED":
+                return self._send(409, {"error": {"code": "job_failed", "message": "The input video may contain a real person."}})
+            return self._send(200, {"data": {"job_id": "job_1", "status": "COMPLETED",
+                                             "result": {"artifacts": [{"id": "artf", "type": "video", "url": st["base"] + "/out.mp4", "content_type": "video/mp4"}]}}})
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(CLIP)))
+        self.end_headers()
+        self.wfile.write(CLIP)
+
+
+@pytest.fixture
+def sume(home, monkeypatch):
+    server = HTTPServer(("127.0.0.1", 0), type("H", (SumeApi,), {}))
+    base = f"http://127.0.0.1:{server.server_port}"
+    state = {"base": base, "submits": [], "estimates": [], "uploads": [], "statuses": ["IN_QUEUE", "IN_PROGRESS", "COMPLETED"]}
+    server.RequestHandlerClass.state = state
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("SUME_API_KEY", SECRET)
+    builtin = json.loads(services.DEFAULTS.read_text())
+    (home / "services.json").write_text(json.dumps(builtin).replace("https://api.sume.com", base))
+    yield state
+    server.shutdown()
+
+
+def sume_plan(tmp_path, body=None, worst=0.6, **extra):
+    plan = tmp_path / "run" / "plan" / "gen_plan.json"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    line = {"id": "c1", "kind": "clip", "family": "f", "canary": True, "route": "http:sume", "worst_case": worst, "poll_s": 0, "out": "clips/c1.bin",
+            "body": body or {"model": "seedance-2.5", "prompt": "image 1 waves", "duration": 4, "resolution": "480p", "aspect_ratio": "16:9", "generate_audio": False}}
+    plan.write_text(json.dumps({"cap": 5, "lines": [line], **extra}))
+    return plan
+
+
+def test_sume_line_follows_the_documented_job_flow_and_settles_at_the_estimate(sume, tmp_path, monkeypatch):
+    monkeypatch.setattr(gen.analyze, "probe", lambda p: {"frames": 96, "duration": 4.0, "fps_rational": "24/1"})
+    r = run(sume_plan(tmp_path))
+    res = r.run_line("c1")
+    assert res["status"] == "done" and res["charged"] == "0.4919" and res["charge_estimated"] is False
+    sent = sume["submits"][0]
+    assert sent["path"] == "/v1/video-router/generate" and sent["auth"] == f"Bearer {SECRET}" and sent["idem"]
+    assert Path(res["path"]).read_bytes() == CLIP
+    assert sume["estimates"][0] == {"model": "seedance-2.5", "input": {k: v for k, v in sent["body"].items() if k != "model"}}
+
+
+def test_sume_estimate_above_worst_case_stops_before_submitting(sume, tmp_path):
+    sume["usd"] = "2.00"
+    r = run(sume_plan(tmp_path))
+    res = r.run_line("c1")
+    assert res["status"] == "refused" and "above" in res["error"] and sume["submits"] == []
+    assert Decimal(r.ledger.summary()["held"]) == 0
+
+
+def test_sume_estimate_rejecting_an_input_stops_before_submitting(sume, tmp_path):
+    sume["estimate_error"] = "reference_video_urls[0] is 320x176 px"
+    r = run(sume_plan(tmp_path))
+    res = r.run_line("c1")
+    assert res["status"] == "refused" and "320x176" in res["error"] and sume["submits"] == []
+
+
+def test_sume_failed_job_reports_the_reason_from_the_result_endpoint(sume, tmp_path):
+    sume["statuses"] = ["FAILED"]
+    r = run(sume_plan(tmp_path))
+    res = r.run_line("c1")
+    assert res["status"] == "failed" and "real person" in res["error"]
+    assert Decimal(r.ledger.summary()["held"]) == 0
+
+
+def test_sume_upload_sends_bytes_once_without_the_key_and_needs_consent(sume, tmp_path, monkeypatch):
+    monkeypatch.setattr(gen.analyze, "probe", lambda p: {"frames": 96, "duration": 4.0, "fps_rational": "24/1"})
+    body = {"model": "seedance-2.5", "prompt": "x", "reference_image_urls": ["<upload ../fox.png>", "<upload ../fox.png>"]}
+    plan = sume_plan(tmp_path, body=body)
+    (plan.parent.parent / "fox.png").write_bytes(b"\x89PNGdata")
+    with pytest.raises(gen.GenError, match="hosting_consent"):
+        run(plan).run_line("c1")
+    assert sume["uploads"] == []
+    doc = json.loads(plan.read_text())
+    doc["hosting_consent"] = True
+    plan.write_text(json.dumps(doc))
+    run(plan).run_line("c1")
+    assert sume["uploads"] == [{"content_type": "image/png", "size_bytes": 8, "filename": "fox.png"}]
+    assert sume["put"] == {"bytes": b"\x89PNGdata", "auth": None, "type": "image/png"}
+    assert sume["submits"][0]["body"]["reference_image_urls"] == ["https://media.example/assets/a1/source"] * 2
+    for path in plan.parent.iterdir():
+        assert "signed" not in path.read_text(), path
+
+
+def test_sume_swap_prices_live_and_sends_references_in_the_documented_fields(sume, tmp_path):
+    svc = get_route("http:sume")
+    j = job(video_url="https://v/s.mp4", image_urls=("https://i/a.png",))
+    q = svc.quote(j)
+    assert q.expected == Decimal("0.4919") and q.ceiling > q.expected and "estimate" in q.basis
+    ledger = Ledger(tmp_path / "ledger.jsonl", "5", "USD")
+    task = swap.execute(svc, j, ledger, tmp_path, poll_interval=0, sleep=lambda s: None)
+    assert task["state"] == "done" and Decimal(ledger.summary()["charged"]) == Decimal("0.4919")
+    body = sume["submits"][0]["body"]
+    assert body["reference_video_urls"] == ["https://v/s.mp4"] and body["reference_image_urls"] == ["https://i/a.png"]
+    assert body["duration"] == 4 and body["generate_audio"] is False and svc.tag("image") == "image 1"
+
+
+def test_sume_remix_only_runs_edit_jobs_and_uses_its_own_endpoint(sume):
+    svc = get_route("http:sume-remix")
+    with pytest.raises(UnsupportedJob, match="edit"):
+        svc.quote(job())
+    edit = job(task="edit", video_url="https://v/s.mp4", image_urls=("https://i/a.png",))
+    svc.quote(edit)
+    svc.submit(edit, "k")
+    sent = sume["submits"][0]
+    assert sent["path"] == "/v1/sume/remix/motion-transfer/v1.0"
+    assert sent["body"]["video_url"] == "https://v/s.mp4" and sent["body"]["image_urls"] == ["https://i/a.png"]

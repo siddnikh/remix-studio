@@ -1,0 +1,117 @@
+{
+  "sume": {
+    "_comment": "Seedance 2.5 through Sume. Change the model in job_body, or pass your own model in a plan line's body. https://www.sume.com/docs/video",
+    "submit": {
+      "url": "https://api.sume.com/v1/video-router/generate",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"},
+      "timeout_s": 120
+    },
+    "idempotency_header": "Idempotency-Key",
+    "task_id_path": "data.job.id",
+    "poll": {
+      "url": "https://api.sume.com/v1/jobs/{task_id}/status",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"}
+    },
+    "status_path": "data.status",
+    "succeeded": ["COMPLETED"],
+    "failed": ["FAILED", "CANCELED"],
+    "error_path": "error.message",
+    "result": {
+      "url": "https://api.sume.com/v1/jobs/{task_id}/result",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"}
+    },
+    "result_url_path": "data.result.artifacts.0.url",
+    "upload": {
+      "url": "https://api.sume.com/v1/files/generate-upload-url",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"},
+      "public_url_path": "data.public_url",
+      "upload_url_path": "data.upload_url",
+      "upload_headers_path": "data.upload_headers"
+    },
+    "estimate": {"url": "https://api.sume.com/v1/open/estimate", "usd_path": "data.usd"},
+    "job_body": {
+      "model": "seedance-2.5",
+      "prompt": "{prompt}",
+      "duration": "{duration_s}",
+      "resolution": "{resolution}",
+      "aspect_ratio": "{aspect_ratio}",
+      "generate_audio": "{generate_audio}",
+      "reference_video_urls": ["{video_url}"],
+      "reference_image_urls": "{image_urls}"
+    },
+    "tags": {"video": "video {n}", "image": "image {n}"}
+  },
+
+  "sume-image": {
+    "_comment": "Stills. A plan line's body names the model. https://www.sume.com/docs/images",
+    "submit": {
+      "url": "https://api.sume.com/v1/image-router/generate",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"},
+      "timeout_s": 120
+    },
+    "idempotency_header": "Idempotency-Key",
+    "task_id_path": "data.job.id",
+    "poll": {
+      "url": "https://api.sume.com/v1/jobs/{task_id}/status",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"}
+    },
+    "status_path": "data.status",
+    "succeeded": ["COMPLETED"],
+    "failed": ["FAILED", "CANCELED"],
+    "error_path": "error.message",
+    "result": {
+      "url": "https://api.sume.com/v1/jobs/{task_id}/result",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"}
+    },
+    "result_url_path": "data.result.artifacts.0.url",
+    "upload": {
+      "url": "https://api.sume.com/v1/files/generate-upload-url",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"},
+      "public_url_path": "data.public_url",
+      "upload_url_path": "data.upload_url",
+      "upload_headers_path": "data.upload_headers"
+    },
+    "estimate": {"url": "https://api.sume.com/v1/open/estimate", "usd_path": "data.usd"}
+  },
+
+  "sume-remix": {
+    "_comment": "Sume's own motion transfer model, for comparing with our shot-by-shot method. Use with --task edit. Source 4-15 s; output follows the source. Not yet run by this project.",
+    "submit": {
+      "url": "https://api.sume.com/v1/sume/remix/motion-transfer/v1.0",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"},
+      "timeout_s": 120
+    },
+    "idempotency_header": "Idempotency-Key",
+    "task_id_path": "data.job.id",
+    "poll": {
+      "url": "https://api.sume.com/v1/jobs/{task_id}/status",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"}
+    },
+    "status_path": "data.status",
+    "succeeded": ["COMPLETED"],
+    "failed": ["FAILED", "CANCELED"],
+    "error_path": "error.message",
+    "result": {
+      "url": "https://api.sume.com/v1/jobs/{task_id}/result",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"}
+    },
+    "result_url_path": "data.result.artifacts.0.url",
+    "upload": {
+      "url": "https://api.sume.com/v1/files/generate-upload-url",
+      "headers": {"Authorization": "Bearer ${SUME_API_KEY}"},
+      "public_url_path": "data.public_url",
+      "upload_url_path": "data.upload_url",
+      "upload_headers_path": "data.upload_headers"
+    },
+    "estimate": {"url": "https://api.sume.com/v1/open/estimate", "usd_path": "data.usd"},
+    "job_body": {
+      "model": "sume-remix-motion-transfer",
+      "prompt": "{prompt}",
+      "video_url": "{video_url}",
+      "image_urls": "{image_urls}",
+      "resolution": "{resolution}"
+    },
+    "tags": {"video": "the source video", "image": "image {n}"},
+    "tasks": ["edit"]
+  }
+}

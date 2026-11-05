@@ -20,8 +20,7 @@ def where() -> dict:
     root = install.ROOT
     assets = root / "skills" / "remix" / "assets"
     return {"root": str(root), "assets": str(assets), "fonts": str(assets / "fonts"), "music": str(assets / "music"), "sfx": str(assets / "sfx"),
-            "spec": str(root / "docs" / "SPEC.md"), "services": str(services.services_path()), "env": str(services.env_path()),
-            "services_example": str(root / "examples" / "services.example.json")}
+            "spec": str(root / "docs" / "SPEC.md"), "services": str(services.services_path()), "env": str(services.env_path())}
 
 
 def _ffmpeg_has(filter_name: str) -> bool:
@@ -67,7 +66,7 @@ def doctor(home: Path) -> tuple[list[str], list[str]]:
     if shutil.which("treg"):
         routes.append("treg")
     check(bool(routes), f"generation routes: {', '.join(routes) or 'none'}",
-          f"copy {where()['services_example']} to {services.services_path()} and fill it in. Analysis and rendering work without this", required=False)
+          f"put SUME_API_KEY=... in {services.env_path()}. Analysis and rendering work without this", required=False)
     return lines, problems
 
 

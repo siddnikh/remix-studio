@@ -1,11 +1,13 @@
 """Any HTTP generation API, described in services.json instead of code.
 
-A plan line or a swap run uses one with the route `http:<name>`. Keys stay in the environment or the env file:
-`${NAME}` is expanded only when a request is sent, so a key never reaches a plan, a state file or a log.
+A plan line or a swap run uses one with the route `http:<name>`. Sume is built in (default_services.json); a
+services.json entry with the same name replaces it. Keys stay in the environment or the env file: `${NAME}` is
+expanded only when a request is sent, so a key never reaches a plan, a state file or a log.
 """
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import math
 import mimetypes
@@ -23,8 +25,9 @@ from .providers import Job, Outcome, ProviderError, Quote, Submission, SubmitRef
 ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 JOB_FIELD = re.compile(r"\{(prompt|video_url|image_urls|duration_s|resolution|aspect_ratio|generate_audio)\}")
 KNOWN_KEYS = {"_comment", "submit", "idempotency_header", "task_id_path", "poll", "status_path", "succeeded", "failed", "error_path",
-              "result", "result_url_path", "charge_path", "charge_scale", "download_headers", "job_body", "tags", "price"}
-PENDING_ON_POLL = "poll"
+              "result", "result_url_path", "charge_path", "charge_scale", "download_headers", "job_body", "tags", "price",
+              "upload", "estimate", "tasks"}
+DEFAULTS = Path(__file__).with_name("default_services.json")
 TIMEOUT_S = 180
 
 
@@ -63,14 +66,14 @@ def _lookup_env(name: str) -> str | None:
 
 
 def load_all() -> dict[str, dict]:
+    services = json.loads(DEFAULTS.read_text())
     path = services_path()
-    if not path.exists():
-        return {}
-    try:
-        doc = json.loads(path.read_text())
-    except json.JSONDecodeError as e:
-        raise ServiceConfigError(f"{path} is not JSON: {e}") from e
-    return {k: v for k, v in doc.items() if not k.startswith("_")}
+    if path.exists():
+        try:
+            services.update(json.loads(path.read_text()))
+        except json.JSONDecodeError as e:
+            raise ServiceConfigError(f"{path} is not JSON: {e}") from e
+    return {k: v for k, v in services.items() if not k.startswith("_")}
 
 
 def get(name: str) -> "HttpService":
@@ -137,7 +140,8 @@ class HttpService:
     # ------------------------------------------------------------ readiness
 
     def required_env(self) -> list[str]:
-        specs = [self.cfg["submit"], self.cfg.get("poll") or {}, self.cfg.get("result") or {}, {"headers": self.cfg.get("download_headers") or {}}]
+        specs = [self.cfg["submit"], self.cfg.get("poll") or {}, self.cfg.get("result") or {}, self.cfg.get("upload") or {},
+                 {"headers": self.cfg.get("download_headers") or {}}]
         found: set[str] = set()
         for spec in specs:
             found.update(ENV_REF.findall(spec.get("url", "")))
@@ -210,8 +214,7 @@ class HttpService:
             return Outcome("pending", error=f"poll HTTP {status}", raw=doc if isinstance(doc, dict) else {})
         state = str(read_path(doc, self.cfg["status_path"])).lower()
         if state in self.failed:
-            error = read_path(doc, self.cfg.get("error_path", "error")) or state
-            return Outcome("failed", error=str(error)[:600], raw=doc)
+            return Outcome("failed", error=str(self._failure_reason(doc, sub.task_id) or state)[:600], raw=doc)
         if state not in self.succeeded:
             return Outcome("pending", raw=doc)
         if not self.cfg.get("result"):
@@ -223,6 +226,17 @@ class HttpService:
         if not 200 <= status < 300:
             return Outcome("pending", error=f"result HTTP {status}", raw=doc)
         return self._finished(result, doc)
+
+    def _failure_reason(self, status_doc: Any, task_id: str) -> Any:
+        """Some services give the reason only on the result endpoint, and a refusal's reason is what the user needs."""
+        path = self.cfg.get("error_path", "error")
+        reason = read_path(status_doc, path)
+        if reason or not self.cfg.get("result"):
+            return reason
+        try:
+            return read_path(self._send(self.cfg["result"], task_id=task_id)[1], path)
+        except (urllib.error.URLError, OSError):
+            return None
 
     def _finished(self, result_doc: Any, status_doc: Any) -> Outcome:
         path = self.cfg.get("result_url_path")
@@ -238,6 +252,59 @@ class HttpService:
         if not url:
             return Outcome("failed", error=f"finished with no output URL: {json.dumps(result_doc)[:400]}", charged=charged, raw=raw_doc)
         return Outcome("succeeded", url, charged, raw=raw_doc)
+
+    @property
+    def can_estimate(self) -> bool:
+        return bool(self.cfg.get("estimate"))
+
+    def estimate(self, body: dict) -> Decimal:
+        """A free price check for a request, sent as {model, input}. It also rejects inputs the model would refuse."""
+        spec = self.cfg["estimate"]
+        request = {"model": body.get("model"), "input": {k: v for k, v in body.items() if k != "model"}}
+        try:
+            status, doc = self._send(spec, request)
+        except (urllib.error.URLError, OSError) as e:
+            raise ProviderError(f"{self.route}: estimate got no answer: {e}") from e
+        if not 200 <= status < 300:
+            raise SubmitRefused(f"{self.route}: estimate refused, HTTP {status}: {json.dumps(doc)[:500]}")
+        price = read_path(doc, spec.get("usd_path", "usd"))
+        if price is None:
+            raise ProviderError(f"{self.route}: estimate has no price: {json.dumps(doc)[:300]}")
+        return Decimal(str(price))
+
+    def upload(self, path: str | Path, cache_path: Path) -> str:
+        """Returns a URL the model can fetch. One upload per file content, so a re-run sends the same job."""
+        spec = self.cfg.get("upload")
+        if not spec:
+            raise ServiceConfigError(f"{self.route} has no upload block; pass a URL instead")
+        self.check_ready()
+        path, cache_path = Path(path), Path(cache_path)
+        data = path.read_bytes()
+        key = hashlib.sha256(data).hexdigest()
+        cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+        if key in cache:
+            return cache[key]
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        try:
+            status, doc = self._send(spec, {"content_type": mime, "size_bytes": len(data), "filename": path.name})
+            if not 200 <= status < 300:
+                raise ProviderError(f"{self.route}: upload refused, HTTP {status}: {json.dumps(doc)[:400]}")
+            target, public = read_path(doc, spec["upload_url_path"]), read_path(doc, spec["public_url_path"])
+            if not target or not public:
+                raise ProviderError(f"{self.route}: upload answer is missing its URLs")
+            put = urllib.request.Request(target, data=data, method="PUT", headers=read_path(doc, spec["upload_headers_path"]) or {})
+            with urllib.request.urlopen(put, timeout=600) as r:
+                if not 200 <= r.status < 300:
+                    raise ProviderError(f"{self.route}: file upload answered HTTP {r.status}")
+        except urllib.error.HTTPError as e:
+            # The upload URL is a secret, so it stays out of the message.
+            raise ProviderError(f"{self.route}: file upload answered HTTP {e.code}") from None
+        except (urllib.error.URLError, OSError) as e:
+            raise ProviderError(f"{self.route}: upload failed: {type(e).__name__}") from None
+        cache[key] = public
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(cache, indent=1))
+        return public
 
     def fetch(self, url: str, dest: Path) -> None:
         """Result URLs can be signed and short-lived, and some need the service's own headers."""
@@ -261,7 +328,13 @@ class HttpService:
         return fmt.replace("{n}", str(n))
 
     def quote(self, job: Job) -> Quote:
-        price = self.cfg.get("price")
+        if job.task not in self.cfg.get("tasks", ["reference"]):
+            raise UnsupportedJob(f"{self.route} does not run a {job.task!r} job; it takes {self.cfg.get('tasks', ['reference'])}")
+        price = self.cfg.get("price") or {}
+        if self.can_estimate:
+            expected = self.estimate(self.job_body(job))
+            ceiling = expected * Decimal(str(price.get("margin", "1.02")))
+            return Quote(self.route, self.currency, expected, expected, ceiling, "live estimate from the service")
         if not price:
             raise UnsupportedJob(f"{self.route}: add a price block, because the ledger needs a number to hold before it spends")
         rate = (price.get("per_second") or {}).get(job.resolution)
@@ -270,8 +343,6 @@ class HttpService:
         allowed = price.get("durations")
         if allowed and job.duration_s not in allowed:
             raise UnsupportedJob(f"{self.route} takes {allowed} s, not {job.duration_s}")
-        if job.task != "reference":
-            raise UnsupportedJob(f"{self.route}: job_body describes a fixed-length job, not {job.task!r}")
         billable = job.duration_s + (math.ceil(job.reference_s) if price.get("bill_reference_seconds") else 0)
         expected = Decimal(str(rate)) * billable
         ceiling = expected * Decimal(str(price.get("margin", "1.02")))
@@ -280,12 +351,15 @@ class HttpService:
     def preflight(self, quote: Quote) -> None:
         self.check_ready()
 
-    def submit(self, job: Job, idempotency_key: str) -> Submission:
+    def job_body(self, job: Job) -> dict:
         if not self.cfg.get("job_body"):
             raise UnsupportedJob(f"{self.route}: subject swap needs a job_body template")
         values = {"prompt": job.prompt, "video_url": job.video_url, "image_urls": list(job.image_urls), "duration_s": job.duration_s,
                   "resolution": job.resolution, "aspect_ratio": job.aspect_ratio, "generate_audio": job.generate_audio}
-        return self.submit_body(_fill(self.cfg["job_body"], values), idempotency_key)
+        return _fill(self.cfg["job_body"], values)
+
+    def submit(self, job: Job, idempotency_key: str) -> Submission:
+        return self.submit_body(self.job_body(job), idempotency_key)
 
     def download(self, sub: Submission, outcome: Outcome, dest: Path) -> None:
         if not outcome.url:

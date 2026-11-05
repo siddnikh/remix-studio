@@ -2,6 +2,7 @@
 """Run paid stills and clips from a finite plan, under the spend ledger.
 
     remix-studio gen quote  run/plan/gen_plan.json              total the plan against its cap; spends nothing
+    remix-studio gen estimate run/plan/gen_plan.json --line c1  free price check, on services that offer one
     remix-studio gen run    run/plan/gen_plan.json --line kf1   reserve, submit, poll, download, settle
     remix-studio gen run    ... --line c2 --reroll "identity"   one bounded retry with a named reason
     remix-studio gen pass-canary run/plan/gen_plan.json --family fox --note "identity holds, hands fine"
@@ -79,12 +80,12 @@ class Run:
         return {"lines": len(lines), "planned": str(planned), "with_all_retries": str(with_retries), "cap": str(cap),
                 "fits_cap": planned <= cap, "retries_fit_cap": with_retries <= cap, "ledger": self.ledger.summary()["available"]}
 
-    def resolve(self, value):
-        """Replace "<result of LINE>" with that line's delivered URL, and "<host path>" with a hosted one."""
+    def resolve(self, value, service=None):
+        """Replace "<result of LINE>" with that line's delivered URL, and "<host path>" or "<upload path>" with a file's URL."""
         if isinstance(value, dict):
-            return {k: self.resolve(v) for k, v in value.items()}
+            return {k: self.resolve(v, service) for k, v in value.items()}
         if isinstance(value, list):
-            return [self.resolve(v) for v in value]
+            return [self.resolve(v, service) for v in value]
         if isinstance(value, str):
             m = re.fullmatch(r"<result of (.+)>", value)
             if m:
@@ -92,6 +93,14 @@ class Run:
                 if not done:
                     raise GenError(f"waiting on line {m.group(1)}: it has no accepted result yet")
                 return done[-1]["url"]
+            m = re.fullmatch(r"<upload (.+)>", value)
+            if m:
+                if not self.plan.get("hosting_consent"):
+                    raise GenError("this plan uploads a local file to a URL anyone with the link can open; set hosting_consent "
+                                   "only after the user agreed for this file")
+                if not service:
+                    raise GenError(f"<upload {m.group(1)}> needs an http: route with an upload block")
+                return service.upload(self._plan_file(m.group(1)), self.dir / "uploads.json")
             m = re.fullmatch(r"<inline (.+)>", value)
             if m:
                 return services.data_uri(self._plan_file(m.group(1)))
@@ -145,7 +154,7 @@ class Run:
             raise GenError(f"family {family!r} has no passed canary; run its canary line, look at it, then pass-canary")
         if attempts:
             attempts[-1]["accepted"] = False
-        body = self.resolve(ln["body"])
+        body = self.resolve(ln["body"], service)
         n = len(attempts) + 1
         idem = hashlib.sha256(json.dumps([line_id, n, body], sort_keys=True).encode()).hexdigest()[:32]
         try:
@@ -157,7 +166,28 @@ class Run:
         self._save()
         return self._follow(ln, attempt)
 
+    def estimate(self, line_id: str) -> dict:
+        ln = self.lines[line_id]
+        service = self._service(ln)
+        if not service or not service.can_estimate:
+            raise GenError(f"line {line_id}: {ln['route']} has no free estimate; read the price from the provider")
+        price = service.estimate(self.resolve(ln["body"], service))
+        return {"line": line_id, "usd": str(price), "worst_case": str(ln["worst_case"]), "fits": price <= Decimal(str(ln["worst_case"]))}
+
     def _submit_http(self, ln: dict, attempt: dict, service: services.HttpService) -> None:
+        if service.can_estimate and "estimate" not in attempt:
+            try:
+                price = service.estimate(attempt["body"])
+                if price > Decimal(str(ln["worst_case"])):
+                    raise providers.SubmitRefused(f"estimate ${price} is above this line's worst_case {ln['worst_case']}")
+            except providers.ProviderError as e:
+                # Nothing was submitted, so the hold can go whatever the estimate's problem was.
+                self.ledger.release(attempt["hold"], f"not submitted: {str(e)[:300]}")
+                attempt.update(status=REFUSED, error=str(e)[:600])
+                self._save()
+                return
+            attempt["estimate"] = str(price)
+            self._save()
         if attempt.get("submit_started") and not service.idempotent:
             raise GenError(f"line {ln['id']}: an earlier submit to {ln['route']} may have created a job and this service has "
                            "no idempotency_header, so sending it again could pay twice. Check the service by hand; the hold stays open")
@@ -205,6 +235,7 @@ class Run:
             if attempt["status"] != OPEN:
                 return attempt
         url, charged = attempt.get("immediate_url"), None
+        known_price = Decimal(attempt["estimate"]) if attempt.get("estimate") else None
         deadline = time.monotonic() + ln.get("timeout_s", 1500)
         while not url:
             outcome = self._poll(ln, attempt)
@@ -224,7 +255,7 @@ class Run:
                 if time.monotonic() > deadline:
                     raise GenError(f"line {ln['id']}: still pending after {ln.get('timeout_s', 1500)} s ({outcome.error or 'no error reported'}); re-run to keep polling")
                 self.sleep(ln.get("poll_s", 15))
-        return self._deliver(ln, attempt, url, charged)
+        return self._deliver(ln, attempt, url, charged if charged is not None else known_price)
 
     def _deliver(self, ln: dict, attempt: dict, url: str, charged: Decimal | None) -> dict:
         service = self._service(ln)
@@ -299,6 +330,9 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("quote", "status"):
         sub.add_parser(name).add_argument("plan")
+    p = sub.add_parser("estimate", help="free price check for one line, on services that offer it")
+    p.add_argument("plan")
+    p.add_argument("--line", required=True)
     p = sub.add_parser("run")
     p.add_argument("plan")
     p.add_argument("--line", required=True)
@@ -316,6 +350,9 @@ def main(argv=None) -> int:
             return 0 if q["fits_cap"] else 1
         if a.cmd == "status":
             print(json.dumps(r.status(), indent=1))
+            return 0
+        if a.cmd == "estimate":
+            print(json.dumps(r.estimate(a.line)))
             return 0
         if a.cmd == "pass-canary":
             r.pass_canary(a.family, a.note)

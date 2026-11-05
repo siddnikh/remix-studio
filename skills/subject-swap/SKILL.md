@@ -8,7 +8,7 @@ description: >-
 
 Replace one subject in one clip. The method is a shot-by-shot prompt written after looking at the source's frames, sent to a model that takes a reference video and images. The prompt does most of the work, so take time on it.
 
-If `remix-studio` is not found, tell the user to run `install.sh` from the remix-studio repo. Run `remix-studio doctor` first. **If it shows no generation route, ask the user which service to use and point them at `remix-studio where` (`services_example`). Never set one up or pay for one on your own.** Ask for the spend cap if none was given. Check that the user has the right to use the people and footage involved.
+If `remix-studio` is not found, tell the user to run `install.sh` from the remix-studio repo. Run `remix-studio doctor` first. The default route is `http:sume`. **If `SUME_API_KEY` is missing, ask the user to add the key to the env file that `remix-studio where` names, and to keep it out of this chat.** Ask for the spend cap if none was given. Check that the user has the right to use the people and footage involved.
 
 ## 1. Prepare (spends nothing)
 
@@ -16,7 +16,7 @@ If `remix-studio` is not found, tell the user to run `install.sh` from the remix
 remix-studio swap prepare source.mp4 --run-dir runs/<slug>
 ```
 
-This trims to whole seconds at exactly 24 fps and writes `source.mp4`, `analysis.json` (measured cuts, camera moves) and `source_sheet.png`. Look at the sheet, plus `frames/` where it isn't clear. Clips under about 4 s tend to be rejected.
+This trims to whole seconds at exactly 24 fps and writes `source.mp4`, `analysis.json` (measured cuts, camera moves) and `source_sheet.png`. Look at the sheet, plus `frames/` where it isn't clear. Clips under about 4 s tend to be rejected. Seedance 2.5 on Sume also refuses reference clips under 407,696 pixels in total (about 640×640), and a reference clip's seconds are billed on top of the output's.
 
 ## 2. Write the shot list
 
@@ -24,18 +24,23 @@ Write `runs/<slug>/shots.json` from what the frames show. Format and worked advi
 
 ## 3. Quote, then run
 
-Local files reach the model in one of three ways, and the second and third send them to another party, so get the user's agreement:
+Local files reach the model in one of these ways. All but the first send them to another party, so get the user's agreement:
 
 - `--video-url URL --image-url URL`: files already hosted.
-- `--inline --subject FILE`: inside the request, if the service takes data URIs.
+- `--upload --subject FILE`: to the service's storage, at a URL anyone with the link can open. This is the normal path on Sume.
+- `--inline --subject FILE`: inside the request, if the service takes data URIs. Sume does not.
 - `--host-public --subject FILE`: public for 7 days through treg. Needs explicit consent for these files.
 
 ```bash
-remix-studio swap quote --run-dir runs/<slug> --shot-list runs/<slug>/shots.json --route http:<name> --inline --subject subject.png
-remix-studio swap run   --run-dir runs/<slug> --shot-list runs/<slug>/shots.json --route http:<name> --inline --subject subject.png --cap <cap>
+remix-studio swap quote --run-dir runs/<slug> --shot-list runs/<slug>/shots.json --route http:sume --upload --subject subject.png
+remix-studio swap run   --run-dir runs/<slug> --shot-list runs/<slug>/shots.json --route http:sume --upload --subject subject.png --cap <cap>
 ```
 
-`quote` prints the price and the composed prompt. Read the prompt before spending. `run` reserves under the ledger, submits, polls, downloads, enforces the duration and scores. It resumes the same task after a crash, so re-run it rather than resubmitting. A failed run needs a new `--run-dir`.
+`quote` prints the live price and the composed prompt, and the estimate rejects bad inputs for free. Read the prompt before spending. `run` reserves under the ledger, submits, polls, downloads, enforces the duration and scores. It resumes the same task after a crash, so re-run it rather than resubmitting. A failed run needs a new `--run-dir`.
+
+No clip has run through Sume yet. How it wants references named in a prompt is undocumented for Seedance (the tool writes `image 1` and `video 1`), so check that on the first clip and tell the user if the subject didn't take.
+
+If the user wants to compare, `--route http:sume-remix --task edit` runs Sume's own motion transfer at about the same price. This project has never tried it, so don't assume which is better.
 
 ## 4. Check, by looking
 

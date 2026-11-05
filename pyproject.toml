@@ -20,7 +20,7 @@ remix-studio = "studio.cli:main"
 packages = ["studio"]
 
 [tool.setuptools.package-data]
-studio = ["matte.m"]
+studio = ["matte.m", "default_services.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

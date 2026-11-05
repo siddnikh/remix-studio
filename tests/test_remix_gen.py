@@ -210,7 +210,9 @@ def test_cap_cannot_be_raised_by_editing_the_plan(tmp_path):
         gen.Run(r.plan_path, treg=FakeTreg())
 
 
-def test_documented_plan_is_valid_and_gates_as_described(tmp_path):
+def test_documented_plan_is_valid_and_gates_as_described(tmp_path, monkeypatch):
+    monkeypatch.setenv("REMIX_STUDIO_HOME", str(tmp_path / "cfg"))
+    monkeypatch.setenv("SUME_API_KEY", "test")
     doc = (ROOT / "skills" / "remix" / "references" / "generation.md").read_text()
     plan = json.loads(doc.split("```json")[1].split("```")[0])
     d = tmp_path / "plan"

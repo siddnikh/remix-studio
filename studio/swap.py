@@ -427,13 +427,20 @@ def run(cfg: RunConfig, composer: Composer, provider: Provider, ledger: Ledger) 
 # ---------------------------------------------------------------- CLI
 
 def _resolve_urls(a) -> tuple[str, tuple[str, ...]]:
+    if a.upload:
+        svc = get_route(a.route)
+        if not isinstance(svc, services.HttpService):
+            raise PipelineError("--upload needs an http: route")
+        cache = Path(a.run_dir) / "uploads.json"
+        return svc.upload(Path(a.run_dir) / "source.mp4", cache), tuple(svc.upload(p, cache) for p in a.subject)
     if a.inline:
         return (services.data_uri(Path(a.run_dir) / "source.mp4"), tuple(services.data_uri(p) for p in a.subject))
     if a.host_public:
         treg = Treg()
         return treg.host(Path(a.run_dir) / "source.mp4")["url"], tuple(treg.host(p)["url"] for p in a.subject)
     if not (a.video_url and a.image_url):
-        raise PipelineError("pass --video-url and --image-url; or --inline --subject FILE to send the files inside the "
+        raise PipelineError("pass --video-url and --image-url; or --upload --subject FILE to upload them to the service, as "
+                            "URLs anyone with the link can open; or --inline --subject FILE to send the files inside the "
                             "request, if the service accepts data URIs; or --host-public --subject FILE to make them "
                             "publicly readable for 7 days through treg")
     return a.video_url, tuple(a.image_url)
@@ -448,7 +455,7 @@ def main(argv=None) -> int:
     def job_args(p):
         p.add_argument("--run-dir", required=True); p.add_argument("--shot-list", required=True)
         p.add_argument("--route", required=True); p.add_argument("--video-url"); p.add_argument("--image-url", action="append")
-        p.add_argument("--host-public", action="store_true"); p.add_argument("--inline", action="store_true")
+        p.add_argument("--host-public", action="store_true"); p.add_argument("--inline", action="store_true"); p.add_argument("--upload", action="store_true")
         p.add_argument("--subject", action="append", default=[])
         p.add_argument("--resolution", default="480p"); p.add_argument("--aspect-ratio"); p.add_argument("--task", default="reference")
 

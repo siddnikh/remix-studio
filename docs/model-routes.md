@@ -1,4 +1,6 @@
-# Model routes for a reference-video job
+# Treg routes for a reference-video job
+
+A snapshot from before Sume became the default generation service, kept as a record. Current setup: `docs/services.md`.
 
 Read with `treg catalog get` and `treg catalog search` on 2026-11-05 (CLI 0.29.0). Team balance at the time: $0.5083.
 "Callable now" means callable on this team today: no key to connect, and the job fits the balance. A 4 s 480p job

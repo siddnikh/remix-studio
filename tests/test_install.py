@@ -76,7 +76,7 @@ def test_uninstall_leaves_a_folder_with_our_name_alone(home):
 def test_where_points_at_real_files(capsys):
     assert cli.main(["where"]) == 0
     w = json.loads(capsys.readouterr().out)
-    for key in ("root", "assets", "fonts", "music", "sfx", "spec", "services_example"):
+    for key in ("root", "assets", "fonts", "music", "sfx", "spec"):
         assert Path(w[key]).exists(), key
 
 

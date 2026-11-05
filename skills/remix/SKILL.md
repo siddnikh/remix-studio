@@ -10,7 +10,7 @@ Author a new edit for the user's subject that speaks the reference's language. I
 
 Work in the user's project folder. Layout: `runs/<slug>/{ref,plan,stills,clips,qa,audio}`. If `remix-studio` is not found, tell the user to run `install.sh` from the remix-studio repo.
 
-Run `remix-studio doctor` first. It says which generation routes are ready. **If none is, the measuring, rendering and scoring still work with footage and images the user already has. To generate anything new, ask the user which service to use and point them at `remix-studio where` (`services_example`). Never set one up or pay for one on your own.** `remix-studio where` also gives the bundled fonts, music and sound effects as absolute paths: use those in the EDL.
+Run `remix-studio doctor` first. It says which generation routes are ready. The default is Sume (`http:sume` for video, `http:sume-image` for stills). **If `SUME_API_KEY` is missing, measuring, rendering and scoring still work with footage and images the user already has. To generate anything new, ask the user to add the key to the env file that `remix-studio where` names, and to keep it out of this chat.** `remix-studio where` also gives the bundled fonts, music and sound effects as absolute paths: use those in the EDL.
 
 **The two things that decide quality:** craft lessons in [references/craft.md](references/craft.md) (read before writing prompts) and looking at real frames rather than trusting any number.
 
@@ -48,7 +48,7 @@ Route each shot by the cheapest thing that truly serves it: existing footage, th
 
 ## 4. Quote and cap
 
-Write `plan/gen_plan.json` ([references/generation.md](references/generation.md)). Read prices from the service's own page or `treg catalog get <route>`. Never quote from memory.
+Write `plan/gen_plan.json` ([references/generation.md](references/generation.md)). Price each Sume line with `remix-studio gen estimate PLAN --line X`, which is free. Never quote from memory.
 
 ```bash
 remix-studio gen quote runs/<slug>/plan/gen_plan.json
